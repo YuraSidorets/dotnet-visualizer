@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "DotnetVisualizer.Cli": {
+      "commandName": "Project",
+      "commandLineArgs": "-i ..\\..\\..\\..\\DotnetVisualizer.Core.sln"
+    }
+  }
+}
