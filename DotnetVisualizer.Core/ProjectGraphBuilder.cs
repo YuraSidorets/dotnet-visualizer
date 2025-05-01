@@ -14,6 +14,82 @@ public static class ProjectGraphBuilder
     private const string packageColour = "#D3D3D3";
     private const string collapseColour = "#8A2BE2";
 
+    public static IEnumerable<(string name, DotGraph graph)> BuildSubgraphsPerProject(
+            string[] roots,
+            bool includePackages,
+            bool directPackagesOnly,
+            bool edgeLabel,
+            Regex[] excludePatterns,
+            bool collapseMatching,
+            string selfRefMode)
+    {
+        var fullGraph = BuildMany(
+            roots,
+            includePackages,
+            directPackagesOnly,
+            edgeLabel,
+            excludePatterns,
+            collapseMatching,
+            selfRefMode);
+
+        var nodeMap = new Dictionary<string, DotNode>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in fullGraph.Elements.OfType<DotNode>())
+        {
+            nodeMap[node.Identifier.Value] = node;
+        }
+        var edges = fullGraph.Elements.OfType<DotEdge>().ToList();
+
+        foreach (var proj in roots.Distinct())
+        {
+            var rootId = Path.GetFileNameWithoutExtension(proj);
+            if (!nodeMap.ContainsKey(rootId))
+                continue; // project not part of graph after excludes
+
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootId };
+            var queue = new Queue<string>();
+            queue.Enqueue(rootId);
+
+            while (queue.Count > 0)
+            {
+                var curr = queue.Dequeue();
+                foreach (var e in edges)
+                {
+                    var from = e.From.Value;
+                    var to = e.To.Value;
+                    // only follow outgoing edges
+                    if (string.Equals(from, curr, StringComparison.OrdinalIgnoreCase)
+                        && visited.Add(to))
+                    {
+                        queue.Enqueue(to);
+                    }
+                }
+            }
+
+            var sub = new DotGraph()
+                .WithIdentifier(rootId)
+                .Directed()
+                .WithRankDir(DotRankDir.LR);
+
+            // Add only the visited nodes
+            foreach (var id in visited)
+            {
+                if (nodeMap.TryGetValue(id, out var n))
+                    sub.Add(n);
+            }
+
+            // Add edges between visited nodes
+            foreach (var e in edges)
+            {
+                var f = e.From.Value;
+                var t = e.To.Value;
+                if (visited.Contains(f) && visited.Contains(t))
+                    sub.Add(e);
+            }
+
+            yield return (rootId, sub);
+        }
+    }
+
     public static DotGraph Build(string root,
                                  bool includePackages,
                                  bool directPackagesOnly,

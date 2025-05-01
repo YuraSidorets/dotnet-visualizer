@@ -57,6 +57,31 @@ ________          __                 __           .__                    .__  ._
 
             var excludeRegexes = CompileExcludes(excludes);
 
+            if (opt.PerProject)
+            {
+                var subgraphs = ProjectGraphBuilder.BuildSubgraphsPerProject(
+                    roots.ToArray(),
+                    opt.IncludePackages,
+                    opt.PackageScope.Equals("direct", StringComparison.OrdinalIgnoreCase),
+                    opt.EdgeLabel,
+                    excludeRegexes,
+                    opt.CollapseMatching,
+                    opt.SelfReferenceMode
+                );
+
+                foreach (var (name, g) in subgraphs)
+                {
+                    var dotFile1 = $"{name}.dot";
+                    GraphvizRenderer.WriteDot(g, dotFile1);
+                    if (opt.RenderSvg)
+                        GraphvizRenderer.RenderSvg(dotFile1, $"{name}.svg");
+
+                    Console.WriteLine($"Graph for {name} => {dotFile1}");
+                }
+
+                return;
+            }
+
             var graph = ProjectGraphBuilder.BuildMany(
                 roots.ToArray(),
                 opt.IncludePackages,
@@ -95,6 +120,7 @@ ________          __                 __           .__                    .__  ._
                 GraphvizRenderer.RenderSvg(dotFile, svg);
                 Console.WriteLine($"SVG => {svg}");
             }
+
             await Task.CompletedTask;
         }
 
@@ -175,4 +201,8 @@ public sealed class CliOptions
       "hide (default) | show | highlight",
     Default = "hide")]
     public string SelfReferenceMode { get; set; } = "hide";
+
+    [Option("per-project",
+        HelpText = "With --folder: emit one graph per each .csproj in that folder.")]
+    public bool PerProject { get; set; }
 }
