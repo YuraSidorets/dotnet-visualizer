@@ -1,4 +1,5 @@
 ﻿using CommandLine;
+using CommandLine.Text;
 using DotnetVisualizer.Core;
 using Microsoft.Build.Locator;
 using Spectre.Console;
@@ -16,7 +17,7 @@ public static class Program
 {
     private static string _msbuildAssemblyDir;
 
-    private static async Task Main(string[] args)
+    private static Task Main(string[] args)
     {
         Console.WriteLine(Banner);
 
@@ -27,11 +28,45 @@ public static class Program
         var parser = new Parser(config =>
         {
             config.CaseInsensitiveEnumValues = true;
+            config.AutoVersion = false;
+            config.AutoHelp = true;
+            config.AutoVersion = false;
         });
 
-        await parser
-            .ParseArguments<CliOptions>(args)
-            .WithParsedAsync(RunAsync);
+        var result = parser.ParseArguments<CliOptions>(args);
+
+        return result
+            .MapResult(
+                SafeRun,
+                errs => ShowHelpAndExit(result, errs));
+    }
+
+    private static async Task<int> SafeRun(CliOptions opt)
+    {
+        try
+        {
+            await RunAsync(opt);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error:[/] {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static Task<int> ShowHelpAndExit<T>(ParserResult<T> result, IEnumerable<Error> errs)
+    {
+        var help = HelpText.AutoBuild(result, h =>
+        {
+            h.AdditionalNewLineAfterOption = false;
+            h.Heading = "dotviz – .NET dependency graph generator";
+            h.Copyright = "";
+            return HelpText.DefaultParsingErrorsHandler(result, h);
+        }, _ => _);
+
+        Console.Error.WriteLine(help);
+        return Task.FromResult(1);
     }
 
     private static async Task RunAsync(CliOptions opt)

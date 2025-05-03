@@ -1,8 +1,7 @@
 {
   "profiles": {
     "DotnetVisualizer.Cli": {
-      "commandName": "Project",
-      "commandLineArgs": "--folder ..\\..\\..\\..\\"
+      "commandName": "Project"
     }
   }
 }

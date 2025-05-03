@@ -1,0 +1,49 @@
+name: Pack & Publish NuGet
+
+on:
+  push:
+    tags: [ 'v*.*.*' ]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    env:
+      DOTNET_VERSION: '8.0.x'
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (Release)
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Pack libraries & tool
+        run: |
+          mkdir -p artifacts
+
+          dotnet pack DotnetVisualizer.Core/DotnetVisualizer.Core.csproj \
+              --configuration Release --no-build --output artifacts
+
+          # pack CLI as a global tool
+          dotnet pack dotviz/dotviz.csproj \
+              --configuration Release --no-build --output artifacts \
+              -p:PackAsTool=true
+
+      - name: Push to NuGet
+        run: |
+          for file in artifacts/*.nupkg; do
+            dotnet nuget push "$file" \
+              --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
