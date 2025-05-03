@@ -29,7 +29,7 @@ public static class DIGraphBuilder
             var nn = new DotNode().WithIdentifier(id)
                                   .WithShape(DotNodeShape.Box)
                                   .WithStyle(DotNodeStyle.Filled)
-                                  .WithFillColor("#F0F0F0");
+                                  .WithFillColor(DotColor.Gray);
             cache[id] = nn;
             dot.Add(nn);
             return nn;

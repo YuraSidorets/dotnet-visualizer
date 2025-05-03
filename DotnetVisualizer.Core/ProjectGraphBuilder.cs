@@ -9,10 +9,10 @@ namespace DotnetVisualizer.Core;
 
 public static class ProjectGraphBuilder
 {
-    private const string projectColour = "#1E90FF";
-    private const string testColour = "#3CB371";
-    private const string packageColour = "#D3D3D3";
-    private const string collapseColour = "#8A2BE2";
+    private static readonly DotColor projectColour = DotColor.DodgerBlue;
+    private static readonly DotColor testColour = DotColor.MediumSeaGreen;
+    private static readonly DotColor packageColour = DotColor.LightGrey;
+    private static readonly DotColor collapseColour = DotColor.BlueViolet;
 
     public static IEnumerable<(string name, DotGraph graph)> BuildSubgraphsPerProject(
             string[] roots,
@@ -128,12 +128,12 @@ public static class ProjectGraphBuilder
 
         var nodeCache = new Dictionary<string, DotNode>(StringComparer.OrdinalIgnoreCase);
 
-        DotNode Node(string id, DotNodeShape shape = DotNodeShape.Box, string? fill = null)
+        DotNode Node(string id, DotNodeShape shape = DotNodeShape.Box, DotColor? fill = null)
         {
             if (nodeCache.TryGetValue(id, out var n)) return n;
             var nn = new DotNode().WithIdentifier(id).WithShape(shape);
             if (fill is not null)
-                nn.WithFillColor(fill).WithStyle(DotNodeStyle.Filled);
+                nn.WithFillColor(fill.Value).WithStyle(DotNodeStyle.Filled);
             nodeCache[id] = nn;
             dot.Add(nn);
             return nn;
@@ -198,15 +198,15 @@ public static class ProjectGraphBuilder
 
     private static void AddPackages(ProjectGraphNode p,
                                     DotNode projNode,
-                                    Func<string, DotNodeShape, string?, DotNode> node,
+                                    Func<string, DotNodeShape, DotColor?, DotNode> node,
                                     DotGraph dot,
                                     bool directOnly,
                                     bool edgeLabel,
-                                    string packageColour,
+                                    DotColor packageColour,
                                     Regex[] excludeRegexes,
                                     bool collapseMatching,
                                     ISet<string> projectNames,
-                                    string collapseColour)
+                                    DotColor collapseColour)
     {
         var obj = Path.Combine(Path.GetDirectoryName(p.ProjectInstance.FullPath)!, "obj");
         var assetsPath = Path.Combine(obj, "project.assets.json");
