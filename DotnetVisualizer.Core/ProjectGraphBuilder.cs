@@ -7,21 +7,27 @@ using System.Text.RegularExpressions;
 
 namespace DotnetVisualizer.Core;
 
+/// <summary>
+/// Creates <see cref="DotGraph"/> representations of MSBuild dependency graphs.
+/// </summary>
 public static class ProjectGraphBuilder
 {
-    private static readonly DotColor projectColour = DotColor.DodgerBlue;
-    private static readonly DotColor testColour = DotColor.MediumSeaGreen;
-    private static readonly DotColor packageColour = DotColor.LightGrey;
-    private static readonly DotColor collapseColour = DotColor.BlueViolet;
+    private static readonly DotColor _projectColour = DotColor.DodgerBlue;
+    private static readonly DotColor _testColour = DotColor.MediumSeaGreen;
+    private static readonly DotColor _packageColour = DotColor.LightGrey;
+    private static readonly DotColor _collapseColour = DotColor.BlueViolet;
 
-    public static IEnumerable<(string name, DotGraph graph)> BuildSubgraphsPerProject(
-            string[] roots,
-            bool includePackages,
-            bool directPackagesOnly,
-            bool edgeLabel,
-            Regex[] excludePatterns,
-            bool collapseMatching,
-            string selfRefMode)
+    /// <summary>
+    /// Build a separate sub‑graph (project node and all reachable dependencies) for each supplied root project path.
+    /// </summary>
+    public static IEnumerable<(string Name, DotGraph Graph)> BuildSubgraphsPerProject(
+        IEnumerable<string> roots,
+        bool includePackages,
+        bool directPackagesOnly,
+        bool edgeLabel,
+        IReadOnlyList<Regex> excludePatterns,
+        bool collapseMatching,
+        SelfReferenceMode selfRefMode)
     {
         var fullGraph = BuildMany(
             roots,
@@ -32,36 +38,29 @@ public static class ProjectGraphBuilder
             collapseMatching,
             selfRefMode);
 
-        var nodeMap = new Dictionary<string, DotNode>(StringComparer.OrdinalIgnoreCase);
-        foreach (var node in fullGraph.Elements.OfType<DotNode>())
-        {
-            nodeMap[node.Identifier.Value] = node;
-        }
+        var nodeMap = fullGraph.Elements
+            .OfType<DotNode>()
+            .ToDictionary(n => n.Identifier.Value, n => n, StringComparer.OrdinalIgnoreCase);
+
         var edges = fullGraph.Elements.OfType<DotEdge>().ToList();
 
-        foreach (var proj in roots.Distinct())
+        var projectRoots = roots.Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var projectPath in projectRoots)
         {
-            var rootId = Path.GetFileNameWithoutExtension(proj);
-            if (!nodeMap.ContainsKey(rootId))
-                continue; // project not part of graph after excludes
+            var rootId = Path.GetFileNameWithoutExtension(projectPath);
+            if (!nodeMap.ContainsKey(rootId)) continue;
 
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootId };
-            var queue = new Queue<string>();
-            queue.Enqueue(rootId);
+            var queue = new Queue<string>([rootId]);
 
             while (queue.Count > 0)
             {
-                var curr = queue.Dequeue();
-                foreach (var e in edges)
+                var current = queue.Dequeue();
+                var currentEdges = edges
+                    .Where(e => e.From.Value.Equals(current, StringComparison.OrdinalIgnoreCase));
+                foreach (var edge in currentEdges)
                 {
-                    var from = e.From.Value;
-                    var to = e.To.Value;
-                    // only follow outgoing edges
-                    if (string.Equals(from, curr, StringComparison.OrdinalIgnoreCase)
-                        && visited.Add(to))
-                    {
-                        queue.Enqueue(to);
-                    }
+                    if (visited.Add(edge.To.Value)) queue.Enqueue(edge.To.Value);
                 }
             }
 
@@ -70,189 +69,189 @@ public static class ProjectGraphBuilder
                 .Directed()
                 .WithRankDir(DotRankDir.LR);
 
-            // Add only the visited nodes
-            foreach (var id in visited)
-            {
-                if (nodeMap.TryGetValue(id, out var n))
-                    sub.Add(n);
-            }
-
-            // Add edges between visited nodes
-            foreach (var e in edges)
-            {
-                var f = e.From.Value;
-                var t = e.To.Value;
-                if (visited.Contains(f) && visited.Contains(t))
-                    sub.Add(e);
-            }
+            foreach (var id in visited.Where(nodeMap.ContainsKey)) sub.Add(nodeMap[id]);
+            foreach (var e in edges.Where(e => visited.Contains(e.From.Value) && visited.Contains(e.To.Value)))
+                sub.Add(e);
 
             yield return (rootId, sub);
         }
     }
 
-    public static DotGraph Build(string root,
-                                 bool includePackages,
-                                 bool directPackagesOnly,
-                                 bool edgeLabel,
-                                 Regex[] excludeRegexes,
-                                 bool collapseMatching,
-                                 string selfRefMode)
-        => BuildMany(new[] { root }, includePackages, directPackagesOnly, edgeLabel, excludeRegexes, collapseMatching, selfRefMode);
-
-    public static DotGraph BuildMany(string[] roots,
-                                     bool includePackages,
-                                     bool directPackagesOnly,
-                                     bool edgeLabel,
-                                     Regex[] excludeRegexes,
-                                     bool collapseMatching,
-                                     string selfRefMode)
+    /// <summary>
+    /// Build a single graph containing every provided root and all their dependencies.
+    /// </summary>
+    public static DotGraph BuildMany(
+        IEnumerable<string> roots,
+        bool includePackages,
+        bool directPackagesOnly,
+        bool edgeLabel,
+        IReadOnlyList<Regex> excludePatterns,
+        bool collapseMatching,
+        SelfReferenceMode selfRefMode)
     {
-        var paths = roots.Select(Path.GetFullPath).ToArray();
-
-        var pg = new ProjectGraph(paths);
+        var rootPaths = roots.Select(Path.GetFullPath).ToArray();
+        var pg = new ProjectGraph(rootPaths);
 
         var dot = new DotGraph()
-                    .WithIdentifier("DotnetVisualizer")
-                    .Directed()
-                    .WithRankDir(DotRankDir.LR);
-
-        var projectColour = ProjectGraphBuilder.projectColour;
-        var testColour = ProjectGraphBuilder.testColour;
-        var packageColour = ProjectGraphBuilder.packageColour;
-        var collapseColour = ProjectGraphBuilder.collapseColour;
+            .WithIdentifier("DotnetVisualizer")
+            .Directed()
+            .WithRankDir(DotRankDir.LR);
 
         var projectNames = pg.ProjectNodes
-                     .Select(n => Path.GetFileNameWithoutExtension(
-                                      n.ProjectInstance.FullPath))
-                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            .Select(n => Path.GetFileNameWithoutExtension(n.ProjectInstance.FullPath))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var nodeCache = new Dictionary<string, DotNode>(StringComparer.OrdinalIgnoreCase);
 
-        DotNode Node(string id, DotNodeShape shape = DotNodeShape.Box, DotColor? fill = null)
+        DotNode Node(string id, DotNodeShape shape, DotColor? fill = null)
         {
-            if (nodeCache.TryGetValue(id, out var n)) return n;
-            var nn = new DotNode().WithIdentifier(id).WithShape(shape);
-            if (fill is not null)
-                nn.WithFillColor(fill.Value).WithStyle(DotNodeStyle.Filled);
-            nodeCache[id] = nn;
-            dot.Add(nn);
-            return nn;
+            if (nodeCache.TryGetValue(id, out var cached)) return cached;
+
+            var node = new DotNode().WithIdentifier(id).WithShape(shape);
+            if (fill is not null) node.WithFillColor(fill.Value).WithStyle(DotNodeStyle.Filled);
+            nodeCache[id] = node;
+            dot.Add(node);
+            return node;
         }
 
-        foreach (var p in pg.ProjectNodes)
+        foreach (var projNode in pg.ProjectNodes)
         {
-            var projId = Path.GetFileNameWithoutExtension(p.ProjectInstance.FullPath);
+            var projId = Path.GetFileNameWithoutExtension(projNode.ProjectInstance.FullPath);
+            if (IsExcluded(projId, excludePatterns)) continue;
 
-            if (IsExcluded(projId, excludeRegexes)) continue;
+            var isTest = projId.Contains("Tests", StringComparison.OrdinalIgnoreCase) ||
+                         projId.Contains("UnitTests", StringComparison.OrdinalIgnoreCase);
+            var nodeProject = Node(projId, DotNodeShape.Box, isTest ? _testColour : _projectColour);
 
-            var isTest = projId.Contains(".Tests", StringComparison.OrdinalIgnoreCase) ||
-                           projId.Contains(".UnitTests", StringComparison.OrdinalIgnoreCase);
-
-            var projNode = Node(projId, DotNodeShape.Box,
-                                isTest ? testColour : projectColour);
-
-            // project → project
-            foreach (var r in p.ProjectReferences)
+            foreach (var reference in projNode.ProjectReferences)
             {
-                var refId = Path.GetFileNameWithoutExtension(r.ProjectInstance.FullPath);
+                var refId = Path.GetFileNameWithoutExtension(reference.ProjectInstance.FullPath);
+                if (IsExcluded(refId, excludePatterns)) continue;
 
                 if (refId.Equals(projId, StringComparison.OrdinalIgnoreCase))
                 {
-                    switch (selfRefMode.ToLowerInvariant())
-                    {
-                        case "hide":
-                            continue;
-                        case "highlight":
-                            {
-                                var edge = new DotEdge().From(projNode).To(projNode)
-                                                     .WithColor("#DC143C")
-                                                     .WithStyle(DotEdgeStyle.Dotted);
-                                edge.WithLabel("Self Reference");
-                                dot.Add(edge);
-                                continue;
-                            }
-                    }
+                    HandleSelfReference(selfRefMode, nodeProject, dot, edgeLabel);
+                    continue;
                 }
 
-                if (IsExcluded(refId, excludeRegexes)) continue;
+                var nodeRef = Node(refId, DotNodeShape.Box,
+                               refId.Contains("Test", StringComparison.OrdinalIgnoreCase)
+                                    ? _testColour : _projectColour);
 
-                var refNode = Node(refId, DotNodeShape.Box,
-                                   refId.Contains("Test", StringComparison.OrdinalIgnoreCase)
-                                            ? testColour : projectColour);
-
-                var e = new DotEdge().From(projNode).To(refNode);
-                if (edgeLabel) e.WithLabel("Reference");
-                dot.Add(e);
+                var edge = new DotEdge().From(nodeProject).To(nodeRef);
+                if (edgeLabel) edge.WithLabel("Reference");
+                dot.Add(edge);
             }
 
-            // packages
             if (includePackages)
-                AddPackages(p, projNode, Node, dot,
-                            directPackagesOnly, edgeLabel,
-                            packageColour, excludeRegexes,
-                            collapseMatching, projectNames, collapseColour);
+            {
+                AddPackages(
+                    projNode,
+                    nodeProject,
+                    Node,
+                    dot,
+                    directPackagesOnly,
+                    edgeLabel,
+                    excludePatterns,
+                    collapseMatching,
+                    projectNames
+                );
+            }
         }
 
         return dot;
     }
 
-    private static void AddPackages(ProjectGraphNode p,
-                                    DotNode projNode,
-                                    Func<string, DotNodeShape, DotColor?, DotNode> node,
-                                    DotGraph dot,
-                                    bool directOnly,
-                                    bool edgeLabel,
-                                    DotColor packageColour,
-                                    Regex[] excludeRegexes,
-                                    bool collapseMatching,
-                                    ISet<string> projectNames,
-                                    DotColor collapseColour)
+    private static void HandleSelfReference(SelfReferenceMode mode, DotNode node, DotGraph graph, bool edgeLabel)
     {
-        var obj = Path.Combine(Path.GetDirectoryName(p.ProjectInstance.FullPath)!, "obj");
-        var assetsPath = Path.Combine(obj, "project.assets.json");
+        switch (mode)
+        {
+            case SelfReferenceMode.Hide:
+                return;
+
+            case SelfReferenceMode.Show:
+                var showEdge = new DotEdge().From(node).To(node);
+                if (edgeLabel) showEdge.WithLabel("Self Reference");
+                graph.Add(showEdge);
+                return;
+
+            case SelfReferenceMode.Highlight:
+                var hlEdge = new DotEdge()
+                    .From(node)
+                    .To(node)
+                    .WithColor(DotColor.Crimson)
+                    .WithStyle(DotEdgeStyle.Dotted)
+                    .WithLabel("Self Reference");
+
+                graph.Add(hlEdge);
+                return;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, null);
+        }
+    }
+
+    private static void AddPackages(
+        ProjectGraphNode project,
+        DotNode projNode,
+        Func<string, DotNodeShape, DotColor?, DotNode> node,
+        DotGraph dot,
+        bool directOnly,
+        bool edgeLabel,
+        IReadOnlyList<Regex> excludePatterns,
+        bool collapseMatching,
+        ISet<string> projectNames)
+    {
+        var assetsPath = Path.Combine(
+            Path.GetDirectoryName(project.ProjectInstance.FullPath)!,
+            "obj",
+            "project.assets.json"
+        );
         if (!File.Exists(assetsPath)) return;
 
         var lockFile = LockFileUtilities.GetLockFile(assetsPath, NullLogger.Instance);
         if (lockFile is null) return;
 
-        HashSet<string>? direct = null;
+        HashSet<string> directRefs = null;
         if (directOnly)
         {
-            direct = p.ProjectInstance
-                      .GetItems("PackageReference")
-                      .Select(i => i.EvaluatedInclude)
-                      .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            directRefs = project.ProjectInstance
+                .GetItems("PackageReference")
+                .Select(i => i.EvaluatedInclude)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
 
         foreach (var lib in lockFile.Libraries.Where(l => l.Type == "package"))
         {
-            if (directOnly && !direct!.Contains(lib.Name)) continue;
+            if (directOnly && (directRefs is null || !directRefs.Contains(lib.Name))) continue;
 
             var id = $"{lib.Name}:{lib.Version}";
-            if (IsExcluded(lib.Name, excludeRegexes) || IsExcluded(id, excludeRegexes))
-                continue;
+            if (IsExcluded(lib.Name, excludePatterns) || IsExcluded(id, excludePatterns)) continue;
 
             if (collapseMatching && projectNames.Contains(lib.Name))
             {
-                var targetProj = node(lib.Name, DotNodeShape.Box,
-                                      projectNames.Contains($"{lib.Name}.Tests")
-                                           ? testColour : projectColour);
+                var targetProject = node(
+                    lib.Name,
+                    DotNodeShape.Box,
+                    projectNames.Contains($"{lib.Name}.Tests") ? _testColour : _projectColour
+                );
+                var edge = new DotEdge()
+                    .From(projNode)
+                    .To(targetProject)
+                    .WithColor(_collapseColour);
 
-                var e = new DotEdge().From(projNode).To(targetProj)
-                                     .WithColor(collapseColour);
-                if (edgeLabel) e.WithLabel("Pkg→Proj");
-                dot.Add(e);
-                continue;                                       // skip package node
+                if (edgeLabel) edge.WithLabel("Pkg => Proj");
+                dot.Add(edge);
+                continue;
             }
 
-            var pkgNode = node(id, DotNodeShape.Ellipse, packageColour);
-
-            var edge = new DotEdge().From(projNode).To(pkgNode);
-            if (edgeLabel) edge.WithLabel("PackageReference");
-            dot.Add(edge);
+            var pkgNode = node(id, DotNodeShape.Ellipse, _packageColour);
+            var pkgEdge = new DotEdge().From(projNode).To(pkgNode);
+            if (edgeLabel) pkgEdge.WithLabel("PackageReference");
+            dot.Add(pkgEdge);
         }
     }
 
-    private static bool IsExcluded(string id, IReadOnlyList<Regex> patterns)
+    private static bool IsExcluded(string id, IEnumerable<Regex> patterns)
         => patterns.Any(r => r.IsMatch(id));
 }

@@ -5,101 +5,104 @@ using System.Text.RegularExpressions;
 
 namespace DotnetVisualizer.Core;
 
+/// <summary>
+/// Produces a dependency graph for an <see cref="IServiceCollection"/>.
+/// </summary>
 public static class DIGraphBuilder
 {
-    public static DotGraph Build(
-           IServiceCollection services,
-           params string[] excludePatterns)
-    {
-        var excludeRegexes = excludePatterns
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Select(p => "^" + Regex.Escape(p)
-                                   .Replace("\\*", ".*")
-                                   .Replace("\\?", ".")
-                                  + "$")
-            .Select(pat => new Regex(pat, RegexOptions.IgnoreCase))
-            .ToArray();
+    private static readonly DotColor _defaultFill = DotColor.Gray;
+    private static readonly DotColor _singleton = DotColor.LightGreen;
+    private static readonly DotColor _scoped = DotColor.Gold;
+    private static readonly DotColor _transient = DotColor.LightPink;
 
-        var dot = new DotGraph().WithIdentifier("DITree").Directed();
+    /// <summary>
+    /// Build a <c>service -> implementation</c> graph, colouring implementation nodes by lifetime.
+    /// </summary>
+    /// <param name="services">The service collection to analyse.</param>
+    /// <param name="excludePatterns">Shell‑style glob patterns to omit (e.g. <c>"Microsoft.*"</c>).</param>
+    public static DotGraph Build(IServiceCollection services, params string[] excludePatterns)
+    {
+        var excludeRegexes = CompilePatterns(excludePatterns);
+
+        var dot = new DotGraph().WithIdentifier("DIServices").Directed().WithRankDir(DotRankDir.LR);
         var cache = new Dictionary<string, DotNode>(StringComparer.OrdinalIgnoreCase);
 
-        DotNode N(string id)
+        DotNode Node(string id, DotColor colour)
         {
-            if (cache.TryGetValue(id, out var n)) return n;
-            var nn = new DotNode().WithIdentifier(id)
-                                  .WithShape(DotNodeShape.Box)
-                                  .WithStyle(DotNodeStyle.Filled)
-                                  .WithFillColor(DotColor.Gray);
-            cache[id] = nn;
-            dot.Add(nn);
-            return nn;
+            if (cache.TryGetValue(id, out var cached)) return cached;
+            var node = new DotNode()
+                .WithIdentifier(id)
+                .WithShape(DotNodeShape.Box)
+                .WithStyle(DotNodeStyle.Filled)
+                .WithFillColor(colour);
+
+            cache[id] = node;
+            dot.Add(node);
+            return node;
         }
 
         foreach (var sd in services)
         {
             var serviceId = sd.ServiceType.FullName ?? sd.ServiceType.Name;
+            if (IsExcluded(serviceId, excludeRegexes)) continue;
 
-            string implId;
-            if (sd.ImplementationType != null)
-            {
-                implId = sd.ImplementationType.FullName!;
-            }
-            else if (sd.ImplementationInstance != null)
-            {
-                implId = sd.ImplementationInstance.GetType().FullName!;
-            }
-            else if (sd.ImplementationFactory != null)
-            {
-                var m = sd.ImplementationFactory.Method;
-                var rt = m.ReturnType;
-                if (rt != typeof(object))
-                    implId = rt.FullName!;
-                else
-                    implId = $"{m.DeclaringType.FullName}.{m.Name}";
-            }
-            else
-            {
-                implId = "UnknownFactory";
-            }
+            var implId = GetImplementationId(sd);
+            if (IsExcluded(implId, excludeRegexes)) continue;
 
-            if (excludeRegexes.Any(rx => rx.IsMatch(serviceId)))
-                continue;
-            if (excludeRegexes.Any(rx => rx.IsMatch(implId)))
-                continue;
+            var serviceNode = Node(serviceId, _defaultFill);
+            var colour = GetNodeColor(sd);
+            var implementationNode = Node(implId, colour);
 
-            var sNode = N(serviceId);
-            var iNode = N(implId);
-            switch (sd.Lifetime)
-            {
-                case ServiceLifetime.Singleton:
-                    iNode.WithFillColor(DotColor.LightGreen);
-                    break;
-
-                case ServiceLifetime.Scoped:
-                    iNode.WithFillColor(DotColor.Gold);
-                    break;
-
-                case ServiceLifetime.Transient:
-                    iNode.WithFillColor(DotColor.LightPink);
-                    break;
-            }
-
-            dot.Add(new DotEdge().From(sNode).To(iNode));
+            dot.Add(new DotEdge().From(serviceNode).To(implementationNode));
         }
 
         return dot;
     }
 
-    public static IServiceCollection DumpDependencyGraph(
-        this IServiceCollection svc,
+    /// <summary>
+    /// Dump a graph for this <see cref="IServiceCollection"/> to disk and optionally render SVG via Graphviz.
+    /// </summary>
+    public static async Task<IServiceCollection> DumpDependencyGraphAsync(
+        this IServiceCollection services,
         string dotPath,
         bool svg = false,
         params string[] excludePatterns)
     {
-        var graph = Build(svc, excludePatterns);
-        GraphvizRenderer.WriteDot(graph, dotPath);
-        if (svg)
-            GraphvizRenderer.RenderSvg(dotPath, Path.ChangeExtension(dotPath, ".svg"));
-        return svc;
+        var graph = Build(services, excludePatterns);
+        await GraphvizRenderer.WriteDotAsync(graph, dotPath);
+        if (svg) GraphvizRenderer.RenderSvg(dotPath, Path.ChangeExtension(dotPath, ".svg"));
+        return services;
     }
+
+    private static DotColor GetNodeColor(ServiceDescriptor sd) => sd.Lifetime switch
+    {
+        ServiceLifetime.Singleton => _singleton,
+        ServiceLifetime.Scoped => _scoped,
+        ServiceLifetime.Transient => _transient,
+        _ => _defaultFill
+    };
+
+    private static string GetImplementationId(ServiceDescriptor sd) => sd switch
+    {
+        { ImplementationType: not null } => sd.ImplementationType!.FullName!,
+        { ImplementationInstance: not null } => sd.ImplementationInstance!.GetType().FullName!,
+        { ImplementationFactory: not null }
+            => sd.ImplementationFactory!.Method is var m &&
+                m.ReturnType != typeof(object) ?
+                    m.ReturnType.FullName! :
+                    $"{m.DeclaringType!.FullName}.{m.Name}",
+        _ => "<unknown>"
+    };
+
+    private static bool IsExcluded(string id, IReadOnlyList<Regex> patterns)
+        => patterns.Any(r => r.IsMatch(id));
+
+    private static Regex[] CompilePatterns(IEnumerable<string> patterns)
+        => patterns
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => "^" + Regex.Escape(p.Trim())
+                                     .Replace("\\*", ".*")
+                                     .Replace("\\?", ".") + "$")
+            .Select(expr => new Regex(expr, RegexOptions.IgnoreCase))
+            .ToArray();
 }
