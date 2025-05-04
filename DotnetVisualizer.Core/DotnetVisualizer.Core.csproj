@@ -6,6 +6,7 @@
     <DisableMSBuildAssemblyCopyCheck>true</DisableMSBuildAssemblyCopyCheck>
     <Description>A library that converts MSBuild project graphs and DI registrations into Graphviz DOT or Mermaid diagrams.</Description>
     <PackageId>DotnetVisualizer.Core</PackageId>
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

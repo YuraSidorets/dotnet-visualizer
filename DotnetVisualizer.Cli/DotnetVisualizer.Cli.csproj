@@ -8,6 +8,7 @@
     <PackageId>dotviz</PackageId>
     <Description>Global CLI tool that draws .NET dependency graphs (projects, NuGet, DI) as Graphviz or Mermaid.</Description>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Version>1.0.1</Version>
   </PropertyGroup>
    
   <ItemGroup>
